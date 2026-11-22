@@ -136,9 +136,9 @@ flowchart TD
    - [x] Define `InferenceBackend` trait and WASM-clean core structs (`Transcript`, `RedactionTrack`, `EditDiff`, `ModelManifest`).
    - [x] Lock in and scaffold **Tauri v2 + Dioxus (WASM)** (`apps/ui-dioxus` + `apps/ui-shell/src-tauri`).
 2. **Phase 1 — v0.1 Desktop MVP (macOS & Windows)**
-   - [ ] Wire local audio pipeline: audio extraction → `whisper-rs` → SQLite Personal Glossary → SRT/FCPXML exporter.
-   - [ ] Wire local vision pipeline: `ort` (`YuNet` + `MobileFaceNet` whitelist + baseline plate detector) → `ByteTrack` + Zero-Leak padding → `wgpu` blur shader.
-   - [ ] Build interactive subtitle/diff editor and timeline track toggle UI.
+   - [x] Wire local audio pipeline: audio extraction → `whisper-rs` → SQLite Personal Glossary → SRT/ASS/FCPXML/Premiere/EDL exporter.
+   - [x] Wire local vision pipeline: `ort` (`YuNet` + `MobileFaceNet` whitelist + baseline plate detector) → `ByteTrack` + Zero-Leak padding → `wgpu` blur shader.
+   - [x] Build interactive subtitle/diff editor and timeline track toggle UI.
 3. **Phase 2 — v0.2 Server, Cloud Boost & First Flywheel**
    - [ ] Stand up `server/` (`Axum` + PostgreSQL + Redis + Cloudflare R2).
    - [ ] Implement `CloudBoostBackend` (Smart Proxy Offloading + SSE progress + atomic credit ledger + immediate R2 cleanup).

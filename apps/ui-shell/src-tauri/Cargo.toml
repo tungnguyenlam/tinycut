@@ -18,6 +18,8 @@ tauri = { version = "2", features = [] }
 tinycut-ai-audio = { path = "../../../crates/ai-audio" }
 tinycut-core-domain = { path = "../../../crates/core-domain" }
 tinycut-export-engine = { path = "../../../crates/export-engine" }
+tinycut-gpu-compositor = { path = "../../../crates/gpu-compositor" }
 tinycut-local-store = { path = "../../../crates/local-store" }
+tinycut-media-engine = { path = "../../../crates/media-engine" }
 tinycut-sync-client = { path = "../../../crates/sync-client" }
 tinycut-vision-shield = { path = "../../../crates/vision-shield" }
