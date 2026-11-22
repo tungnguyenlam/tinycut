@@ -4,7 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+whisper = ["dep:whisper-rs"]
+
 [dependencies]
 async-trait = { workspace = true }
 tinycut-core-domain = { path = "../core-domain" }
+tinycut-media-engine = { path = "../media-engine" }
 uuid = { workspace = true }
+whisper-rs = { version = "0.14", optional = true }
