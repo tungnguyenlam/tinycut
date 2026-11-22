@@ -4,5 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+onnx = ["dep:ort"]
+
 [dependencies]
+ort = { version = "2.0.0-rc.9", optional = true }
 tinycut-core-domain = { path = "../core-domain" }
+tinycut-media-engine = { path = "../media-engine" }
+
+[dev-dependencies]
+uuid = { workspace = true }
