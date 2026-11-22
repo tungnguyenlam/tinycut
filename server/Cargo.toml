@@ -1,0 +1,13 @@
+[package]
+name = "tinycut-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tinycut-core-domain = { path = "../crates/core-domain" }
+tokio = { workspace = true }
+tracing = { workspace = true }

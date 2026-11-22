@@ -1,0 +1,14 @@
+/target
+**/target
+Cargo.lock
+apps/ui-dioxus/dist
+apps/ui-shell/src-tauri/gen
+.DS_Store
+.idea/
+*.sqlite
+*.db
+.env
+ml/.venv
+ml/__pycache__
+ml/checkpoints
+ml/data

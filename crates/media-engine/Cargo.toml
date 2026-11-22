@@ -1,0 +1,8 @@
+[package]
+name = "tinycut-media-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tinycut-core-domain = { path = "../core-domain" }

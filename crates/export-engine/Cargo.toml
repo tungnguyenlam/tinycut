@@ -1,0 +1,11 @@
+[package]
+name = "tinycut-export-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tinycut-core-domain = { path = "../core-domain" }
+
+[dev-dependencies]
+uuid = { workspace = true }

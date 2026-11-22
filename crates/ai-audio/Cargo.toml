@@ -1,0 +1,10 @@
+[package]
+name = "tinycut-ai-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+tinycut-core-domain = { path = "../core-domain" }
+uuid = { workspace = true }

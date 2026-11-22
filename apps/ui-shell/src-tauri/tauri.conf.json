@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TinyCut",
+  "version": "0.1.0",
+  "identifier": "com.tinycut.app",
+  "build": {
+    "beforeDevCommand": "cd ../../ui-dioxus && dx serve --platform web --port 1420",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "cd ../../ui-dioxus && dx build --platform web --release",
+    "frontendDist": "../../ui-dioxus/dist/public"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "TinyCut",
+        "width": 1200,
+        "height": 800,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

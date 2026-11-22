@@ -1,0 +1,23 @@
+[package]
+name = "tinycut-ui-shell"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "tinycut_ui_shell_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tinycut-ai-audio = { path = "../../../crates/ai-audio" }
+tinycut-core-domain = { path = "../../../crates/core-domain" }
+tinycut-export-engine = { path = "../../../crates/export-engine" }
+tinycut-local-store = { path = "../../../crates/local-store" }
+tinycut-sync-client = { path = "../../../crates/sync-client" }
+tinycut-vision-shield = { path = "../../../crates/vision-shield" }

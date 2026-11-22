@@ -1,0 +1,9 @@
+[package]
+name = "tinycut-sync-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+tinycut-core-domain = { path = "../core-domain" }
