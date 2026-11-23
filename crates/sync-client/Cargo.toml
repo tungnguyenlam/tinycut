@@ -4,6 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Open-source default enables both auditable client hooks (dormant unless explicitly
+# configured/opted in). Air-gapped FOSS builds can pass `--no-default-features`.
+default = ["cloud-boost", "telemetry"]
+cloud-boost = ["dep:async-trait", "tinycut-core-domain/native"]
+telemetry = []
+
 [dependencies]
-async-trait = { workspace = true }
-tinycut-core-domain = { path = "../core-domain" }
+async-trait = { workspace = true, optional = true }
+tinycut-core-domain = { path = "../core-domain", default-features = false }
+
+[dev-dependencies]
+uuid = { workspace = true }

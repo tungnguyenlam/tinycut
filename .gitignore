@@ -8,7 +8,3 @@ apps/ui-shell/src-tauri/gen
 *.sqlite
 *.db
 .env
-ml/.venv
-ml/__pycache__
-ml/checkpoints
-ml/data

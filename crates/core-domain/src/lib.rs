@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod protocol;
+pub use protocol::{
+    CloudBoostTaskKind, CreateCloudBoostJobRequest, CreateCloudBoostJobResponse, JobProgressEvent,
+    ModelManifestResponse, PROTOCOL_VERSION, TextDiffTelemetryBatch, VisionHardNegativeRequest,
+    VisionHardNegativeUploadResponse,
+};
+
 #[derive(Debug, Error)]
 pub enum DomainError {
     #[error("project is locked in NDA/private mode; cloud and telemetry operations are blocked")]
@@ -107,17 +114,6 @@ pub struct EditDiff {
     pub user_final: String,
     pub edit_type: EditType,
     pub audio_clip_ref: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextDiffTelemetryBatch {
-    pub anonymous_client_id: String,
-    pub app_version: String,
-    pub asr_model_version: String,
-    pub llm_model_version: Option<String>,
-    pub locale: String,
-    pub content_domain: Option<String>,
-    pub corrections: Vec<EditDiff>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,14 +436,6 @@ pub struct ModelArtifact {
 pub struct ModelManifest {
     pub generated_at_unix: u64,
     pub models: Vec<ModelArtifact>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobProgressEvent {
-    pub job_id: Uuid,
-    pub stage: String,
-    pub percent: u8,
-    pub message: String,
 }
 
 #[cfg(feature = "native")]

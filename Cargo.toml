@@ -10,7 +10,6 @@ members = [
     "crates/export-engine",
     "crates/local-store",
     "crates/sync-client",
-    "server",
 ]
 # UI apps target wasm32 (ui-dioxus) or require OS WebView headers (ui-shell);
 # build them with `dx` and `cargo tauri` respectively.
