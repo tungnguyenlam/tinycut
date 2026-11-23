@@ -5,13 +5,18 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["onnx", "qr"]
 onnx = ["dep:ort"]
+qr = ["dep:rqrr"]
 
 [dependencies]
-ort = { version = "2.0.0-rc.9", optional = true }
+ort = { version = "2.0.0-rc.15", features = ["download-binaries"], optional = true }
+rqrr = { version = "0.11", optional = true }
 tinycut-core-domain = { path = "../core-domain" }
 tinycut-media-engine = { path = "../media-engine" }
+tinycut-model-hub = { path = "../model-hub" }
+tracing = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true }
 uuid = { workspace = true }

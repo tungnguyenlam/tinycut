@@ -3,17 +3,18 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
-use tinycut_core_domain::{ModelManifest, TextDiffTelemetryBatch};
+use tinycut_core_domain::{ModelManifest, TextDiffTelemetryBatch, default_model_manifest};
 
 async fn health() -> &'static str {
     "ok"
 }
 
 async fn get_manifest() -> Json<ModelManifest> {
-    Json(ModelManifest {
-        generated_at_unix: 0,
-        models: vec![],
-    })
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Json(default_model_manifest(now))
 }
 
 async fn ingest_text_diffs(Json(batch): Json<TextDiffTelemetryBatch>) -> StatusCode {

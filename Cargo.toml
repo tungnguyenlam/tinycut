@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/core-domain",
+    "crates/model-hub",
     "crates/media-engine",
     "crates/ai-audio",
     "crates/vision-shield",

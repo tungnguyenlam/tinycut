@@ -1,12 +1,18 @@
+mod detectors;
+pub mod image_ops;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tinycut_core_domain::{
-    DomainResult, MediaRef, NormalizedBox, RedactionKeyframe, RedactionKind, RedactionTrack,
-    ShieldConfig,
+    DomainResult, MediaRef, ModelType, NormalizedBox, RedactionKeyframe, RedactionKind,
+    RedactionTrack, ShieldConfig,
 };
-use tinycut_media_engine::FfmpegMediaExtractor;
+use tinycut_media_engine::{DecodedFrame, FfmpegMediaExtractor};
+use tinycut_model_hub::ModelManager;
 
-/// Raw single-frame detection produced by an ONNX detector (e.g. YuNet, D-FINE-n).
+pub use detectors::detect_qr_codes;
+
+/// Raw single-frame detection produced by a local detector (YuNet, RT-DETRv2, PP-OCRv4, or rqrr).
 #[derive(Debug, Clone)]
 pub struct FrameDetection {
     pub frame_index: u64,
@@ -16,7 +22,7 @@ pub struct FrameDetection {
     pub embedding: Option<Vec<f32>>,
 }
 
-/// Cosine similarity between two normalized face embeddings (e.g. MobileFaceNet 128-dim vectors)
+/// Cosine similarity between two normalized face embeddings (e.g. SFace 128-dim vectors)
 /// used for the Creator Face Whitelist.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
@@ -146,7 +152,6 @@ impl ActiveTrackState {
         let dt = det.frame_index.saturating_sub(self.last_frame).max(1) as f32;
         let new_vx = (det.bbox.x - self.last_bbox.x) / dt;
         let new_vy = (det.bbox.y - self.last_bbox.y) / dt;
-        // Exponential smoothing for velocity (lightweight Kalman-like filter).
         self.vx = 0.6 * self.vx + 0.4 * new_vx;
         self.vy = 0.6 * self.vy + 0.4 * new_vy;
         self.last_frame = det.frame_index;
@@ -201,7 +206,7 @@ impl Default for ByteTracker {
     fn default() -> Self {
         Self {
             high_conf_thresh: 0.50,
-            low_conf_thresh: 0.15,
+            low_conf_thresh: 0.08,
             iou_thresh: 0.25,
             max_lost_frames: 15,
             next_id: 1,
@@ -216,7 +221,12 @@ impl ByteTracker {
         let mut high_dets = Vec::new();
         let mut low_dets = Vec::new();
         for det in detections {
-            if det.confidence >= self.high_conf_thresh {
+            // Single-class RT-DETRv2 plate scores are calibrated lower (~0.08–0.30) than multi-class detectors.
+            let is_high = match det.kind {
+                RedactionKind::LicensePlate => det.confidence >= 0.08,
+                _ => det.confidence >= self.high_conf_thresh,
+            };
+            if is_high {
                 high_dets.push(det);
             } else if det.confidence >= self.low_conf_thresh {
                 low_dets.push(det);
@@ -383,28 +393,72 @@ pub fn interpolate_boxes_for_frame(
     boxes
 }
 
-/// Local on-device Vision Privacy Shield engine (`ort` detectors + `ByteTracker` + Creator Whitelist + Zero-Leak Padding).
-#[derive(Debug, Clone, Default)]
+/// Local on-device Vision Privacy Shield engine plugged into TinyCut's default lightweight models:
+/// - **Faces:** `YuNet 2023mar` ONNX
+/// - **Creator Face Re-ID:** `SFace 2021dec` ONNX
+/// - **License Plates:** `RT-DETRv2 R18 Plate` ONNX (Apache-2.0)
+/// - **Screen PII:** `PP-OCRv4 Mobile Det` + `PP-OCRv3 Mobile En Rec` ONNX + regex PII matcher
+/// - **QR Codes:** Built-in pure-Rust `rqrr`
+#[derive(Debug, Clone)]
 pub struct LocalVisionEngine {
     pub face_detector_onnx: Option<PathBuf>,
     pub face_embedder_onnx: Option<PathBuf>,
     pub plate_detector_onnx: Option<PathBuf>,
+    pub screen_ocr_det_onnx: Option<PathBuf>,
+    pub screen_ocr_rec_onnx: Option<PathBuf>,
     pub whitelist_threshold: f32,
+    pub face_conf_threshold: f32,
+    pub plate_conf_threshold: f32,
+}
+
+impl Default for LocalVisionEngine {
+    fn default() -> Self {
+        Self::from_model_manager(&ModelManager::default())
+    }
 }
 
 impl LocalVisionEngine {
+    /// Creates a `LocalVisionEngine` auto-wired to any installed default lightweight models
+    /// in `~/.tinycut/models` (or `$TINYCUT_MODELS_DIR`).
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a `LocalVisionEngine` wired to installed models from a specific `ModelManager`.
+    pub fn from_model_manager(mgr: &ModelManager) -> Self {
         Self {
-            face_detector_onnx: None,
-            face_embedder_onnx: None,
-            plate_detector_onnx: None,
-            whitelist_threshold: 0.60,
+            face_detector_onnx: mgr.resolve_if_installed(ModelType::FaceDetector),
+            face_embedder_onnx: mgr.resolve_if_installed(ModelType::FaceEmbedder),
+            plate_detector_onnx: mgr.resolve_if_installed(ModelType::PlateDetector),
+            screen_ocr_det_onnx: mgr.resolve_if_installed(ModelType::ScreenOcrDet),
+            screen_ocr_rec_onnx: mgr.resolve_if_installed(ModelType::ScreenOcrRec),
+            whitelist_threshold: 0.45,
+            face_conf_threshold: 0.60,
+            plate_conf_threshold: 0.08,
+        }
+    }
+
+    /// Runs all enabled local detectors on a single decoded RGBA frame.
+    pub fn detect_frame_rgba(
+        &self,
+        frame: &DecodedFrame,
+        cfg: &ShieldConfig,
+    ) -> DomainResult<Vec<FrameDetection>> {
+        #[cfg(feature = "onnx")]
+        {
+            let mut bundle = detectors::OnnxDetectorBundle::load(self, cfg)?;
+            bundle.detect_frame(frame, cfg)
+        }
+        #[cfg(not(feature = "onnx"))]
+        {
+            detectors::detect_frame_non_onnx(frame, cfg)
         }
     }
 
     /// Runs the full local privacy shield pipeline on `media`:
     /// 1. Samples keyframes via `FfmpegMediaExtractor` when `media.path` exists.
-    /// 2. Runs configured ONNX detectors (`YuNet`, `MobileFaceNet`, `D-FINE-n`) when `--features onnx` is enabled.
+    /// 2. Loads configured ONNX sessions once (`YuNet`, `SFace`, `RT-DETRv2`, `PP-OCRv4/v3`) and
+    ///    runs them plus built-in `rqrr` QR detection on every sampled frame.
     /// 3. Tracks detections across frames with `ByteTracker`.
     /// 4. Filters out whitelisted creator faces (`apply_creator_whitelist`).
     /// 5. Applies Zero-Leak spatial (+10%) & temporal (±3 frames) padding.
@@ -424,8 +478,19 @@ impl LocalVisionEngine {
         if path.exists() && media.width > 0 && media.height > 0 {
             let extractor = FfmpegMediaExtractor::default();
             let frames = extractor.extract_sampled_frames_rgba(media, 6.0, 640)?;
+
+            #[cfg(feature = "onnx")]
+            {
+                let mut bundle = detectors::OnnxDetectorBundle::load(self, cfg)?;
+                for frame in &frames {
+                    let dets = bundle.detect_frame(frame, cfg)?;
+                    tracker.update_frame(frame.frame_index, &dets);
+                }
+            }
+
+            #[cfg(not(feature = "onnx"))]
             for frame in &frames {
-                let dets = self.detect_frame(frame.frame_index, cfg);
+                let dets = detectors::detect_frame_non_onnx(frame, cfg)?;
                 tracker.update_frame(frame.frame_index, &dets);
             }
         } else {
@@ -482,7 +547,7 @@ impl LocalVisionEngine {
             &mut tracks,
             &embeddings,
             whitelisted_embeddings,
-            self.whitelist_threshold.max(0.5),
+            self.whitelist_threshold.max(0.35),
         );
 
         let padded = tracks
@@ -490,12 +555,6 @@ impl LocalVisionEngine {
             .map(|t| apply_zero_leak_padding(t, cfg, total_frames))
             .collect();
         Ok(padded)
-    }
-
-    fn detect_frame(&self, _frame_index: u64, _cfg: &ShieldConfig) -> Vec<FrameDetection> {
-        // ONNX Runtime (`ort`) sessions for YuNet / MobileFaceNet / D-FINE-n plug in here
-        // once model weights are downloaded via `GET /v1/models/manifest`.
-        Vec::new()
     }
 }
 
@@ -531,7 +590,6 @@ mod tests {
             }],
         };
         let padded = apply_zero_leak_padding(&track, &ShieldConfig::default(), 100);
-        // 3 frames before + original + 3 frames after = 7 keyframes
         assert_eq!(padded.keyframes.len(), 7);
         assert_eq!(padded.keyframes.first().unwrap().frame_index, 7);
         assert_eq!(padded.keyframes.last().unwrap().frame_index, 13);
@@ -545,7 +603,7 @@ mod tests {
             0,
             &[FrameDetection {
                 frame_index: 0,
-                kind: RedactionKind::LicensePlate,
+                kind: RedactionKind::Face,
                 bbox: NormalizedBox {
                     x: 0.20,
                     y: 0.50,
@@ -561,7 +619,7 @@ mod tests {
             2,
             &[FrameDetection {
                 frame_index: 2,
-                kind: RedactionKind::LicensePlate,
+                kind: RedactionKind::Face,
                 bbox: NormalizedBox {
                     x: 0.22,
                     y: 0.50,
@@ -601,7 +659,95 @@ mod tests {
         assert_eq!(active_faces.len(), 1);
 
         let mid_boxes = interpolate_boxes_for_frame(&tracks, 22);
-        // 1 plate + 1 bystander face (creator face is whitelisted)
         assert_eq!(mid_boxes.len(), 2);
+    }
+
+    #[test]
+    fn screen_pii_classifier_flags_emails_phones_and_keys() {
+        assert!(image_ops::is_screen_pii_text("contact: alice@tinycut.dev"));
+        assert!(image_ops::is_screen_pii_text("0912 345 678"));
+        assert!(image_ops::is_screen_pii_text("OPENAI_API_KEY=sk-1234567890abcdef"));
+        assert!(!image_ops::is_screen_pii_text("Hello Saigon Vlog"));
+    }
+
+    #[test]
+    fn prob_map_connected_components_extracts_text_box() {
+        let w = 64;
+        let h = 32;
+        let mut map = vec![0.0_f32; w * h];
+        for y in 10..20 {
+            for x in 12..44 {
+                map[y * w + x] = 0.85;
+            }
+        }
+        let boxes = image_ops::extract_text_boxes_from_prob_map(&map, w, h, 0.3, 0.5);
+        assert_eq!(boxes.len(), 1);
+        assert!(boxes[0].0.w > 0.45);
+        assert!(boxes[0].1 > 0.8);
+    }
+
+    #[test]
+    #[ignore = "downloads default lightweight ONNX vision models and verifies live inference I/O"]
+    fn live_vision_onnx_models_smoke_test() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mgr = ModelManager::default();
+        for task in [
+            ModelType::FaceDetector,
+            ModelType::FaceEmbedder,
+            ModelType::PlateDetector,
+            ModelType::ScreenOcrDet,
+            ModelType::ScreenOcrRec,
+        ] {
+            rt.block_on(mgr.ensure_model(task)).unwrap();
+        }
+
+        let engine = LocalVisionEngine::from_model_manager(&mgr);
+        let frame = DecodedFrame {
+            frame_index: 0,
+            width: 320,
+            height: 240,
+            rgba: vec![180u8; 320 * 240 * 4],
+        };
+        let cfg = ShieldConfig {
+            detect_plates: true,
+            detect_faces: true,
+            detect_screen_pii: true,
+            detect_qr: true,
+            ..ShieldConfig::default()
+        };
+        let dets = engine.detect_frame_rgba(&frame, &cfg).unwrap();
+        // Verify SFace embedder explicitly produces a 128-dim L2-normalized embedding.
+        #[cfg(feature = "onnx")]
+        {
+            let mut bundle = detectors::OnnxDetectorBundle::load(&engine, &cfg).unwrap();
+            let emb = bundle
+                .embed_face_sface(
+                    &frame,
+                    NormalizedBox {
+                        x: 0.25,
+                        y: 0.25,
+                        w: 0.5,
+                        h: 0.5,
+                    },
+                )
+                .unwrap();
+            assert_eq!(emb.len(), 128);
+            let norm: f32 = emb.iter().map(|v| v * v).sum::<f32>().sqrt();
+            assert!((norm - 1.0).abs() < 1e-3);
+
+            // Verify PP-OCRv3 mobile recognizer executes cleanly on a text-line crop.
+            let _recognized = bundle
+                .recognize_text_crop_ppocr(
+                    &frame,
+                    NormalizedBox {
+                        x: 0.1,
+                        y: 0.1,
+                        w: 0.6,
+                        h: 0.15,
+                    },
+                )
+                .unwrap();
+        }
+        let _ = dets;
     }
 }

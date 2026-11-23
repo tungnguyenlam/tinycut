@@ -7,19 +7,26 @@
     "beforeDevCommand": "cd ../../ui-dioxus && dx serve --platform web --port 1420",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "cd ../../ui-dioxus && dx build --platform web --release",
-    "frontendDist": "../../ui-dioxus/dist/public"
+    "frontendDist": "../../ui-dioxus/target/dx/tinycut-ui-dioxus/release/web/public"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
-        "title": "TinyCut",
-        "width": 1200,
-        "height": 800,
+        "title": "TinyCut Studio",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 700,
         "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost blob:; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**", "$VIDEO/**", "$DESKTOP/**", "$DOWNLOAD/**"]
+      }
     }
   },
   "bundle": {

@@ -130,6 +130,21 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Deletes a glossary entry by its spoken variant (case-insensitive).
+    pub fn delete_glossary_term(&self, spoken_variant: &str) -> DomainResult<()> {
+        let key = spoken_variant.trim().to_lowercase();
+        if key.is_empty() {
+            return Ok(());
+        }
+        self.lock_conn()?
+            .execute(
+                "DELETE FROM glossary_entries WHERE spoken_key = ?1",
+                params![key],
+            )
+            .map_err(|e| DomainError::Storage(format!("failed to delete glossary term: {e}")))?;
+        Ok(())
+    }
+
     pub fn save_project(&self, project: &Project) -> DomainResult<()> {
         let mode = match project.inference_mode {
             InferenceMode::Local => "local",
@@ -399,6 +414,9 @@ mod tests {
         let entries = store.all_entries().unwrap();
         assert_eq!(entries[0].preferred_term, "Cursor");
         assert_eq!(entries[0].hit_count, 2);
+
+        store.delete_glossary_term("mác búc").unwrap();
+        assert_eq!(store.list_preferred_terms().unwrap(), vec!["Cursor"]);
 
         let project = Project {
             id: Uuid::new_v4(),

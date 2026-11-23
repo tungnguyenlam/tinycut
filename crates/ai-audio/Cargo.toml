@@ -5,12 +5,23 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["whisper", "vad-onnx", "local-llm"]
 whisper = ["dep:whisper-rs"]
+vad-onnx = ["dep:ort"]
+local-llm = ["dep:candle-core", "dep:candle-transformers", "dep:tokenizers"]
 
 [dependencies]
 async-trait = { workspace = true }
+candle-core = { version = "0.11", optional = true }
+candle-transformers = { version = "0.11", optional = true }
+ort = { version = "2.0.0-rc.15", features = ["download-binaries"], optional = true }
 tinycut-core-domain = { path = "../core-domain" }
 tinycut-media-engine = { path = "../media-engine" }
+tinycut-model-hub = { path = "../model-hub" }
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"], optional = true }
+tracing = { workspace = true }
 uuid = { workspace = true }
-whisper-rs = { version = "0.14", optional = true }
+whisper-rs = { version = "0.16", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

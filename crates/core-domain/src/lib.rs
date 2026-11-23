@@ -206,12 +206,44 @@ impl Default for ShieldConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelType {
+    /// Speech-to-text ASR (Whisper GGML).
     Asr,
+    /// Neural voice activity detection (Silero-VAD ONNX).
+    Vad,
+    /// Local bilingual subtitle fixer LLM (Qwen2.5 GGUF).
     TextFixer,
+    /// Tokenizer JSON paired with the local GGUF subtitle fixer LLM.
+    TextFixerTokenizer,
+    /// Face bounding-box detector (OpenCV Zoo YuNet ONNX).
+    FaceDetector,
+    /// Face identity embedder for Creator Whitelist Re-ID (OpenCV Zoo SFace ONNX).
+    FaceEmbedder,
+    /// License plate detector (Apache-2.0 RT-DETRv2 ONNX).
+    PlateDetector,
+    /// Screen PII text region detector (PP-OCRv4 mobile det ONNX).
+    ScreenOcrDet,
+    /// Screen PII text recognizer (PP-OCRv3 mobile rec ONNX).
+    ScreenOcrRec,
+    /// Legacy aggregate vision shield bundle tag (kept for manifest compatibility).
     VisionShield,
+}
+
+impl ModelType {
+    /// All individual downloadable default lightweight model tasks in execution order.
+    pub const ALL_DOWNLOADABLE: [ModelType; 9] = [
+        Self::Asr,
+        Self::Vad,
+        Self::TextFixer,
+        Self::TextFixerTokenizer,
+        Self::FaceDetector,
+        Self::FaceEmbedder,
+        Self::PlateDetector,
+        Self::ScreenOcrDet,
+        Self::ScreenOcrRec,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,6 +251,179 @@ pub enum ModelType {
 pub enum DeviceTier {
     Mobile,
     Desktop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultModelSpec {
+    pub task: ModelType,
+    pub id: String,
+    pub display_name: String,
+    pub task_label: String,
+    pub filename: String,
+    pub runtime: String,
+    pub license: String,
+    pub download_url: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub tier: DeviceTier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelInstallStatus {
+    pub spec: DefaultModelSpec,
+    pub installed: bool,
+    pub local_path: Option<String>,
+    pub bytes_on_disk: u64,
+}
+
+/// Returns the verified default lightweight, commercial-safe (MIT / Apache-2.0) model
+/// plugged into each TinyCut local AI task.
+pub fn default_lightweight_models() -> Vec<DefaultModelSpec> {
+    vec![
+        DefaultModelSpec {
+            task: ModelType::Asr,
+            id: "whisper-base-q5_1".into(),
+            display_name: "Whisper Base (Q5_1)".into(),
+            task_label: "Speech-to-Text (ASR)".into(),
+            filename: "ggml-base-q5_1.bin".into(),
+            runtime: "whisper-rs (GGML)".into(),
+            license: "MIT".into(),
+            download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin".into(),
+            sha256: String::new(),
+            size_bytes: 59_707_625,
+            tier: DeviceTier::Mobile,
+        },
+        DefaultModelSpec {
+            task: ModelType::Vad,
+            id: "silero-vad-v5".into(),
+            display_name: "Silero VAD v5".into(),
+            task_label: "Voice Activity Detection".into(),
+            filename: "silero_vad.onnx".into(),
+            runtime: "ort (ONNX)".into(),
+            license: "MIT".into(),
+            download_url: "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx".into(),
+            sha256: String::new(),
+            size_bytes: 2_204_103,
+            tier: DeviceTier::Mobile,
+        },
+        DefaultModelSpec {
+            task: ModelType::TextFixer,
+            id: "qwen2.5-0.5b-instruct-q4_k_m".into(),
+            display_name: "Qwen2.5 0.5B Instruct (Q4_K_M)".into(),
+            task_label: "Subtitle Fixer LLM".into(),
+            filename: "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf".into(),
+            runtime: "candle (GGUF)".into(),
+            license: "Apache-2.0".into(),
+            download_url: "https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf".into(),
+            sha256: String::new(),
+            size_bytes: 397_808_192,
+            tier: DeviceTier::Mobile,
+        },
+        DefaultModelSpec {
+            task: ModelType::TextFixerTokenizer,
+            id: "qwen2.5-0.5b-tokenizer".into(),
+            display_name: "Qwen2.5 0.5B Tokenizer".into(),
+            task_label: "Subtitle Fixer Tokenizer".into(),
+            filename: "qwen2.5-0.5b-tokenizer.json".into(),
+            runtime: "tokenizers (JSON)".into(),
+            license: "Apache-2.0".into(),
+            download_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/tokenizer.json".into(),
+            sha256: String::new(),
+            size_bytes: 7_031_645,
+            tier: DeviceTier::Mobile,
+        },
+        DefaultModelSpec {
+            task: ModelType::FaceDetector,
+            id: "yunet-2023mar".into(),
+            display_name: "YuNet 2023mar".into(),
+            task_label: "Face Detection".into(),
+            filename: "face_detection_yunet_2023mar.onnx".into(),
+            runtime: "ort (ONNX)".into(),
+            license: "MIT".into(),
+            download_url: "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx".into(),
+            sha256: String::new(),
+            size_bytes: 232_589,
+            tier: DeviceTier::Mobile,
+        },
+        DefaultModelSpec {
+            task: ModelType::FaceEmbedder,
+            id: "sface-2021dec".into(),
+            display_name: "SFace 2021dec".into(),
+            task_label: "Creator Face Re-ID".into(),
+            filename: "face_recognition_sface_2021dec.onnx".into(),
+            runtime: "ort (ONNX)".into(),
+            license: "Apache-2.0".into(),
+            download_url: "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx".into(),
+            sha256: String::new(),
+            size_bytes: 38_696_353,
+            tier: DeviceTier::Mobile,
+        },
+        DefaultModelSpec {
+            task: ModelType::PlateDetector,
+            id: "rtdetrv2-r18-plate".into(),
+            display_name: "RT-DETRv2 R18 Plate".into(),
+            task_label: "License Plate Detection".into(),
+            filename: "plate_rtdetr.onnx".into(),
+            runtime: "ort (ONNX)".into(),
+            license: "Apache-2.0".into(),
+            download_url: "https://huggingface.co/Topurrra/rtdetr-license-plate-detection-onnx/resolve/main/plate_rtdetr.onnx".into(),
+            sha256: String::new(),
+            size_bytes: 80_671_879,
+            tier: DeviceTier::Desktop,
+        },
+        DefaultModelSpec {
+            task: ModelType::ScreenOcrDet,
+            id: "ppocrv4-mobile-det".into(),
+            display_name: "PP-OCRv4 Mobile Det".into(),
+            task_label: "Screen PII Text Detect".into(),
+            filename: "ch_PP-OCRv4_det_infer.onnx".into(),
+            runtime: "ort (ONNX)".into(),
+            license: "Apache-2.0".into(),
+            download_url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx".into(),
+            sha256: String::new(),
+            size_bytes: 4_745_517,
+            tier: DeviceTier::Mobile,
+        },
+        DefaultModelSpec {
+            task: ModelType::ScreenOcrRec,
+            id: "ppocrv3-mobile-en-rec".into(),
+            display_name: "PP-OCRv3 Mobile Rec".into(),
+            task_label: "Screen PII Text Read".into(),
+            filename: "en_PP-OCRv3_rec_infer.onnx".into(),
+            runtime: "ort (ONNX)".into(),
+            license: "Apache-2.0".into(),
+            download_url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv3/en_PP-OCRv3_rec_infer.onnx".into(),
+            sha256: String::new(),
+            size_bytes: 8_967_018,
+            tier: DeviceTier::Mobile,
+        },
+    ]
+}
+
+/// Look up the default lightweight model spec for a specific task.
+pub fn default_model_spec(task: ModelType) -> Option<DefaultModelSpec> {
+    default_lightweight_models()
+        .into_iter()
+        .find(|m| m.task == task)
+}
+
+/// Builds a `ModelManifest` populated with all default lightweight models.
+pub fn default_model_manifest(generated_at_unix: u64) -> ModelManifest {
+    let models = default_lightweight_models()
+        .into_iter()
+        .map(|spec| ModelArtifact {
+            model_type: spec.task,
+            tier: spec.tier,
+            version: spec.id,
+            download_url: spec.download_url,
+            sha256: spec.sha256,
+            size_bytes: spec.size_bytes,
+        })
+        .collect();
+    ModelManifest {
+        generated_at_unix,
+        models,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
