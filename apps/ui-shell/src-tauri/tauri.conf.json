@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.tinycut.app",
   "build": {
-    "beforeDevCommand": "cd ../../ui-dioxus && dx serve --platform web --port 1420",
+    "beforeDevCommand": "pnpm --dir ../../ui-web dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "cd ../../ui-dioxus && dx build --platform web --release",
-    "frontendDist": "../../ui-dioxus/target/dx/tinycut-ui-dioxus/release/web/public"
+    "beforeBuildCommand": "pnpm --dir ../../ui-web build",
+    "frontendDist": "../../ui-web/dist"
   },
   "app": {
     "withGlobalTauri": true,
@@ -25,7 +25,7 @@
       "csp": "default-src 'self' asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost blob:; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/**", "$VIDEO/**", "$DESKTOP/**", "$DOWNLOAD/**"]
+        "scope": ["$HOME/**", "$VIDEO/**", "$DESKTOP/**", "$DOWNLOAD/**", "$APPDATA/**", "$APPLOCALDATA/**"]
       }
     }
   },

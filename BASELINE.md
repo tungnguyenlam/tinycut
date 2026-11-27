@@ -46,18 +46,18 @@
 ```text
 tinycut/
 ├── crates/
-│   ├── core-domain/       # Shared structs, InferenceBackend trait, & v1 wire protocol (WASM-clean)
+│   ├── core-domain/       # Shared structs (optional specta derives), InferenceBackend trait, & v1 wire protocol
 │   ├── model-hub/         # Default MIT/Apache-2.0 lightweight model downloader & SHA-256 verifier
-│   ├── media-engine/      # Video demux/mux, audio extraction, smart proxy builder, 3-6s slicer
-│   ├── ai-audio/          # whisper-rs (ASR) + candle (Qwen GGUF Text Fixer) + Silero-VAD (ort)
-│   ├── vision-shield/     # ONNX Runtime (ort) detectors + PP-OCR + ByteTrack/Kalman tracker
-│   ├── gpu-compositor/    # wgpu shaders (Gaussian blur, pixelate, solid mask) + CPU fallback
+│   ├── media-engine/      # Streaming frame decode/encode, preview proxy cache, waveform peaks, smart proxy builder
+│   ├── ai-audio/          # whisper-rs (GGML ASR) + Silero-VAD (ort ONNX) + extensible SubtitleFixer trait
+│   ├── vision-shield/     # Streaming ONNX Runtime (ort) detectors + PP-OCR + ByteTrack/Kalman tracker
+│   ├── gpu-compositor/    # wgpu shaders (Gaussian blur, pixelate, solid mask) with buffer reuse + CPU fallback
 │   ├── export-engine/     # SRT, ASS, FCPXML, Premiere XML, DaVinci EDL, Alpha Mask
 │   ├── local-store/       # SQLite (rusqlite) for projects, glossary, face whitelists, offline queue
 │   └── sync-client/       # On-device PII scrubber, NDA guard, feature-gated Cloud Boost & telemetry client
 └── apps/
-    ├── ui-dioxus/         # 100% Rust Dioxus frontend compiled to WASM (imports core-domain directly)
-    └── ui-shell/          # Tauri v2 native host (macOS, Win, Linux, iOS, iPadOS, Android)
+    ├── ui-web/            # SolidJS + Vite + TypeScript frontend (type-safe bindings via tauri-specta)
+    └── ui-shell/          # Tauri v2 native desktop host (macOS, Win, Linux); mobile shells use UniFFI + SwiftUI/Compose
 ```
 
 ### Unified Inference Abstraction (`core-domain`)
@@ -69,7 +69,7 @@ pub trait InferenceBackend: Send + Sync {
     async fn detect_privacy(&self, media: &MediaRef, cfg: &ShieldConfig) -> DomainResult<Vec<RedactionTrack>>;
 }
 ```
-- `LocalBackend`: Runs `whisper-rs`, `candle` (GGUF), and `ort` on local hardware.
+- `LocalBackend`: Runs consolidated 2-runtime local inference (`whisper-rs` GGML + `ort` ONNX Runtime) plus deterministic Personal Glossary post-processing.
 - `CloudBoostBackend` *(feature `cloud-boost`)*: Builds a lightweight smart proxy (48kbps Opus audio or 720p@10–15fps video — never raw 4K source files), uploads to a presigned ephemeral URL, streams SSE progress, and returns identical domain structs to render locally at native 4K 60fps via `wgpu`.
 
 ### Platform Hardware & Memory Matrix
@@ -112,7 +112,7 @@ Defined in `crates/core-domain/src/protocol.rs`. The client talks to any server 
 
 ## 6. Client Roadmap
 
-- **v0.1 — Desktop MVP (macOS, Windows, Linux):** Local bilingual subtitles + Personal Glossary + 1-click Privacy Shield (Plates + Faces + Creator Whitelist) + Tauri v2 / Dioxus WASM Studio UI.
-- **v0.2 — Cloud Boost Client & OTA Model Manifests:** Wire `CloudBoostBackend` HTTP/SSE client, Smart Proxy Offloading, and signed manifest model updates against the `v1` protocol.
-- **v0.3 — Mobile Expansion (iOS, iPadOS, Android):** Responsive mobile UI, native AVFoundation / MediaExtractor bindings, and strict single-model-in-RAM swapping.
+- **v0.1 — Desktop MVP (macOS, Windows, Linux):** Local bilingual subtitles + Personal Glossary + 1-click Privacy Shield (Plates + Faces + Creator Whitelist) + streaming media/GPU burn-in + Tauri v2 / SolidJS TypeScript (`tauri-specta`) Studio UI.
+- **v0.2 — Cloud Boost Client & OTA Model Manifests:** Wire `CloudBoostBackend` HTTP/SSE transport, Smart Proxy Offloading, and signed manifest model updates against the `v1` protocol.
+- **v0.3 — Mobile Expansion (iOS, iPadOS, Android):** Thin native SwiftUI & Jetpack Compose shells over the Rust core (`UniFFI`), native AVFoundation / MediaExtractor bindings, and strict single-model-in-RAM swapping.
 - **v0.4 — Pro Integrations:** Screen-Recording PII detector (`PP-OCRv4` + NER/Regex), Spoken PII Auto-Beep, and non-destructive transparent alpha-mask / keyframed XML export for FCP, Premiere, and DaVinci Resolve.

@@ -1,6 +1,6 @@
 use bytemuck::{Pod, Zeroable};
+use std::sync::Mutex;
 use tinycut_core_domain::{BlurStyle, DomainError, DomainResult, NormalizedBox};
-use wgpu::util::DeviceExt;
 
 #[derive(Debug, Clone)]
 pub struct CompositorFrameTask {
@@ -51,12 +51,25 @@ fn to_pixel_boxes(width: u32, height: u32, boxes: &[NormalizedBox]) -> Vec<Pixel
         .collect()
 }
 
+struct CachedFrameBuffers {
+    width: u32,
+    height: u32,
+    box_capacity: usize,
+    params_buf: wgpu::Buffer,
+    src_buf: wgpu::Buffer,
+    dst_buf: wgpu::Buffer,
+    staging_buf: wgpu::Buffer,
+    boxes_buf: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
 /// Hardware-accelerated `wgpu` compute-shader compositor (Metal / Vulkan / DX12).
 pub struct WgpuCompositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    cache: Mutex<Option<CachedFrameBuffers>>,
 }
 
 impl WgpuCompositor {
@@ -152,7 +165,84 @@ impl WgpuCompositor {
             queue,
             pipeline,
             bind_group_layout,
+            cache: Mutex::new(None),
         })
+    }
+
+    fn allocate_frame_buffers(
+        &self,
+        width: u32,
+        height: u32,
+        box_capacity: usize,
+    ) -> CachedFrameBuffers {
+        let frame_bytes = (width as u64) * (height as u64) * 4;
+        let boxes_bytes = (box_capacity * std::mem::size_of::<PixelBox>()) as u64;
+
+        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("params"),
+            size: std::mem::size_of::<ShaderParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let src_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("src-pixels"),
+            size: frame_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let dst_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("dst-pixels"),
+            size: frame_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging-pixels"),
+            size: frame_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let boxes_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("redact-boxes"),
+            size: boxes_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("redact-bg"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: src_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: dst_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: boxes_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        CachedFrameBuffers {
+            width,
+            height,
+            box_capacity,
+            params_buf,
+            src_buf,
+            dst_buf,
+            staging_buf,
+            boxes_buf,
+            bind_group,
+        }
     }
 }
 
@@ -190,62 +280,34 @@ impl GpuCompositor for WgpuCompositor {
             box_count: pixel_boxes.len() as u32,
         };
 
-        let params_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let src_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("src-pixels"),
-                contents: rgba_in,
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-        let dst_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("dst-pixels"),
-            size: expected_bytes as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let staging_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging-pixels"),
-            size: expected_bytes as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let boxes_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("redact-boxes"),
-                contents: bytemuck::cast_slice(&pixel_boxes),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+        let mut cache_guard = self
+            .cache
+            .lock()
+            .map_err(|_| DomainError::Media("wgpu frame buffer cache mutex poisoned".into()))?;
 
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("redact-bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: src_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: dst_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: boxes_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let needs_realloc = match cache_guard.as_ref() {
+            Some(cached) => {
+                cached.width != width
+                    || cached.height != height
+                    || pixel_boxes.len() > cached.box_capacity
+            }
+            None => true,
+        };
+
+        if needs_realloc {
+            let box_capacity = pixel_boxes.len().next_power_of_two().max(16);
+            *cache_guard = Some(self.allocate_frame_buffers(width, height, box_capacity));
+        }
+
+        let cached = cache_guard.as_ref().unwrap();
+        self.queue
+            .write_buffer(&cached.params_buf, 0, bytemuck::bytes_of(&params));
+        self.queue.write_buffer(&cached.src_buf, 0, rgba_in);
+        self.queue.write_buffer(
+            &cached.boxes_buf,
+            0,
+            bytemuck::cast_slice(&pixel_boxes),
+        );
 
         let mut encoder = self
             .device
@@ -258,13 +320,19 @@ impl GpuCompositor for WgpuCompositor {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &cached.bind_group, &[]);
             pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
         }
-        encoder.copy_buffer_to_buffer(&dst_buf, 0, &staging_buf, 0, expected_bytes as u64);
+        encoder.copy_buffer_to_buffer(
+            &cached.dst_buf,
+            0,
+            &cached.staging_buf,
+            0,
+            expected_bytes as u64,
+        );
         self.queue.submit(Some(encoder.finish()));
 
-        let slice = staging_buf.slice(..);
+        let slice = cached.staging_buf.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
@@ -277,8 +345,17 @@ impl GpuCompositor for WgpuCompositor {
         let mapped = slice.get_mapped_range();
         let out = mapped.to_vec();
         drop(mapped);
-        staging_buf.unmap();
+        cached.staging_buf.unmap();
         Ok(out)
+    }
+}
+
+/// Returns a hardware-accelerated `WgpuCompositor` if a compatible GPU adapter is available,
+/// otherwise falls back to `CpuCompositor`.
+pub fn create_best_compositor() -> Box<dyn GpuCompositor> {
+    match WgpuCompositor::try_new() {
+        Ok(gpu) => Box::new(gpu),
+        Err(_) => Box::new(CpuCompositor),
     }
 }
 
@@ -420,5 +497,92 @@ mod tests {
         let center = ((8 * w + 8) as usize) * 4;
         // Center pixel should be averaged rather than pure 240 or 0
         assert!(out[center] > 40 && out[center] < 220);
+    }
+
+    #[test]
+    fn best_compositor_renders_multiple_frames_and_reuses_buffers() {
+        let compositor = create_best_compositor();
+        let w = 32_u32;
+        let h = 24_u32;
+
+        // Render several frames with identical dimensions (exercises buffer reuse in WgpuCompositor)
+        for frame_idx in 0..5_u64 {
+            let mut frame = vec![200u8; (w * h * 4) as usize];
+            frame[0..4].copy_from_slice(&[15, 25, 35, 255]);
+
+            let style = match frame_idx % 3 {
+                0 => BlurStyle::SolidMask,
+                1 => BlurStyle::Pixelate,
+                _ => BlurStyle::Gaussian,
+            };
+            let task = CompositorFrameTask {
+                frame_index: frame_idx,
+                style,
+                boxes: vec![NormalizedBox {
+                    x: 0.5,
+                    y: 0.5,
+                    w: 0.4,
+                    h: 0.4,
+                }],
+            };
+
+            let out = compositor
+                .render_frame_rgba8(w, h, &frame, &task)
+                .expect("render should succeed");
+            assert_eq!(out.len(), frame.len());
+            assert_eq!(&out[0..4], &[15, 25, 35, 255]);
+            if style == BlurStyle::SolidMask {
+                let inside = ((16 * w + 20) as usize) * 4;
+                assert_eq!(&out[inside..inside + 4], &[18, 18, 22, 255]);
+            }
+        }
+
+        // Grow box count past initial capacity (16) to exercise boxes_buf reallocation
+        let many_boxes: Vec<NormalizedBox> = (0..20)
+            .map(|i| NormalizedBox {
+                x: 0.5 + (i as f32) * 0.01,
+                y: 0.5,
+                w: 0.1,
+                h: 0.1,
+            })
+            .collect();
+        let frame = vec![220u8; (w * h * 4) as usize];
+        let out = compositor
+            .render_frame_rgba8(
+                w,
+                h,
+                &frame,
+                &CompositorFrameTask {
+                    frame_index: 5,
+                    style: BlurStyle::SolidMask,
+                    boxes: many_boxes,
+                },
+            )
+            .expect("reallocation for >16 boxes should succeed");
+        assert_eq!(out.len(), frame.len());
+
+        // Change frame dimensions to exercise full buffer reallocation
+        let w2 = 16_u32;
+        let h2 = 16_u32;
+        let frame2 = vec![180u8; (w2 * h2 * 4) as usize];
+        let out2 = compositor
+            .render_frame_rgba8(
+                w2,
+                h2,
+                &frame2,
+                &CompositorFrameTask {
+                    frame_index: 6,
+                    style: BlurStyle::SolidMask,
+                    boxes: vec![NormalizedBox {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 0.5,
+                        h: 0.5,
+                    }],
+                },
+            )
+            .expect("reallocation for new dimensions should succeed");
+        assert_eq!(out2.len(), frame2.len());
+        assert_eq!(&out2[0..4], &[18, 18, 22, 255]);
     }
 }

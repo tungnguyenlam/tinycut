@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-#[cfg(any(feature = "whisper", feature = "vad-onnx", feature = "local-llm"))]
+#[cfg(any(feature = "whisper", feature = "vad-onnx"))]
 use tinycut_core_domain::DomainError;
 use tinycut_core_domain::{
     DomainResult, EditDiff, EditType, GlossaryEntry, MediaRef, ModelType, Transcript,
@@ -180,14 +180,19 @@ pub fn apply_glossary_and_cleanup(
     }
 
     if strip_fillers {
-        for filler in ["ờ, ", "à, ", "ừm, ", "kiểu như "] {
+        for filler in ["ờ, ", "à, ", "ừm, ", "kiểu như ", "uh, ", "um, "] {
             result = replace_case_insensitive(&result, filler, "");
         }
     }
 
-    // Normalize whitespace and capitalize the first character.
+    // Normalize whitespace, tighten stray spaces before punctuation, and capitalize the first character.
     let collapsed = result.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = collapsed.chars();
+    let punctuated = collapsed
+        .replace(" ,", ",")
+        .replace(" .", ".")
+        .replace(" !", "!")
+        .replace(" ?", "?");
+    let mut chars = punctuated.chars();
     match chars.next() {
         None => String::new(),
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
@@ -259,10 +264,88 @@ pub fn compute_edit_diff(segment: &TranscriptSegment, user_final: &str) -> Optio
     })
 }
 
-/// Local on-device audio & text inference engine plugged into TinyCut's default lightweight models:
-/// - **ASR:** `Whisper Base (Q5_1)` via `whisper-rs`
-/// - **VAD:** `Silero-VAD v5` via `ort`
-/// - **Subtitle Fixer LLM:** `Qwen2.5-0.5B-Instruct (Q4_K_M)` via `candle`
+/// Pluggable subtitle cleanup backend.
+///
+/// Ships with [`DeterministicGlossaryFixer`] out of the box (fast, zero-weight
+/// Personal Glossary + Vietnamese/English filler/punctuation cleanup) while
+/// keeping a clean extension point for future `llama.cpp`, ONNX, or Cloud Boost
+/// subtitle fixers.
+pub trait SubtitleFixer: Send + Sync {
+    /// Model/backend version identifier recorded in `Transcript::llm_model_version`.
+    fn model_version(&self) -> String;
+
+    /// Cleans a single subtitle line using the creator's Personal Glossary.
+    fn fix_line(&self, text: &str, glossary_entries: &[GlossaryEntry]) -> DomainResult<String>;
+
+    /// Cleans every non-empty segment in `transcript` in place, updating `llm_draft`,
+    /// `text`, and `llm_model_version`.
+    fn fix_transcript(
+        &self,
+        transcript: &mut Transcript,
+        glossary_entries: &[GlossaryEntry],
+    ) -> DomainResult<()> {
+        for seg in &mut transcript.segments {
+            if seg.text.trim().is_empty() {
+                continue;
+            }
+            let cleaned = self.fix_line(&seg.text, glossary_entries)?;
+            seg.llm_draft = Some(cleaned.clone());
+            seg.text = cleaned;
+        }
+        transcript.llm_model_version = Some(self.model_version());
+        Ok(())
+    }
+}
+
+/// Deterministic Personal Glossary + Vietnamese/English casing, punctuation, and
+/// filler cleanup implementation of [`SubtitleFixer`].
+#[derive(Debug, Clone)]
+pub struct DeterministicGlossaryFixer {
+    pub model_version: String,
+    pub strip_fillers: bool,
+}
+
+impl Default for DeterministicGlossaryFixer {
+    fn default() -> Self {
+        Self {
+            model_version: "deterministic-glossary-v1".into(),
+            strip_fillers: true,
+        }
+    }
+}
+
+impl DeterministicGlossaryFixer {
+    pub fn new(model_version: impl Into<String>) -> Self {
+        Self {
+            model_version: model_version.into(),
+            strip_fillers: true,
+        }
+    }
+
+    pub fn with_strip_fillers(mut self, strip_fillers: bool) -> Self {
+        self.strip_fillers = strip_fillers;
+        self
+    }
+}
+
+impl SubtitleFixer for DeterministicGlossaryFixer {
+    fn model_version(&self) -> String {
+        self.model_version.clone()
+    }
+
+    fn fix_line(&self, text: &str, glossary_entries: &[GlossaryEntry]) -> DomainResult<String> {
+        Ok(apply_glossary_and_cleanup(
+            text,
+            glossary_entries,
+            self.strip_fillers,
+        ))
+    }
+}
+
+/// Local on-device audio & text inference engine plugged into TinyCut's consolidated ML stack:
+/// - **ASR:** `Whisper Base (Q5_1)` via `whisper-rs` (GGML)
+/// - **VAD:** `Silero-VAD v5` via `ort` (ONNX)
+/// - **Subtitle Fixer:** pluggable [`SubtitleFixer`] (defaults to [`DeterministicGlossaryFixer`])
 #[derive(Debug, Clone)]
 pub struct LocalAudioEngine {
     pub asr_model_version: String,
@@ -518,178 +601,28 @@ impl LocalAudioEngine {
         })
     }
 
-    /// Runs subtitle cleanup using **Qwen2.5-0.5B-Instruct (Q4_K_M GGUF)** via `candle` when both
-    /// GGUF and tokenizer files are installed, paired with deterministic Personal Glossary guardrails.
+    /// Runs subtitle cleanup using a caller-supplied [`SubtitleFixer`] implementation.
+    pub fn fix_subtitles_with(
+        &self,
+        raw: &Transcript,
+        glossary_entries: &[GlossaryEntry],
+        fixer: &dyn SubtitleFixer,
+    ) -> DomainResult<Transcript> {
+        let mut out = raw.clone();
+        fixer.fix_transcript(&mut out, glossary_entries)?;
+        Ok(out)
+    }
+
+    /// Runs local subtitle cleanup using [`DeterministicGlossaryFixer`] (Personal Glossary
+    /// substitutions + Vietnamese/English casing, punctuation, and filler cleanup).
     pub async fn fix_subtitles_local(
         &self,
         raw: &Transcript,
         glossary_entries: &[GlossaryEntry],
     ) -> DomainResult<Transcript> {
-        let mut out = raw.clone();
-
-        #[cfg(feature = "local-llm")]
-        if let (Some(gguf_path), Some(tok_path)) = (&self.llm_model_path, &self.llm_tokenizer_path)
-            && gguf_path.exists()
-            && tok_path.exists()
-        {
-            match self.fix_transcript_with_qwen(&mut out, glossary_entries, gguf_path, tok_path) {
-                Ok(()) => {
-                    out.llm_model_version = Some(self.llm_model_version.clone());
-                    return Ok(out);
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        error = %err,
-                        "Qwen2.5 GGUF inference failed; falling back to deterministic glossary fixer"
-                    );
-                }
-            }
-        }
-
-        out.llm_model_version = Some(format!("{}:glossary-fallback", self.llm_model_version));
-        for seg in &mut out.segments {
-            let cleaned = apply_glossary_and_cleanup(&seg.text, glossary_entries, true);
-            seg.llm_draft = Some(cleaned.clone());
-            seg.text = cleaned;
-        }
-        Ok(out)
+        let fixer = DeterministicGlossaryFixer::new(format!("{}:glossary", self.llm_model_version));
+        self.fix_subtitles_with(raw, glossary_entries, &fixer)
     }
-
-    #[cfg(feature = "local-llm")]
-    fn fix_transcript_with_qwen(
-        &self,
-        transcript: &mut Transcript,
-        glossary_entries: &[GlossaryEntry],
-        gguf_path: &Path,
-        tokenizer_path: &Path,
-    ) -> DomainResult<()> {
-        use candle_core::quantized::gguf_file;
-        use candle_core::{Device, Tensor};
-        use candle_transformers::models::quantized_qwen2::ModelWeights;
-        use tokenizers::Tokenizer;
-
-        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|e| {
-            DomainError::Inference(format!(
-                "failed to load tokenizer {}: {e}",
-                tokenizer_path.display()
-            ))
-        })?;
-        let eos_im_end = tokenizer.token_to_id("<|im_end|>").unwrap_or(151_645);
-        let eos_eot = tokenizer.token_to_id("<|endoftext|>").unwrap_or(151_643);
-
-        let device = Device::Cpu;
-        let mut file = std::fs::File::open(gguf_path).map_err(|e| {
-            DomainError::Inference(format!(
-                "failed to open GGUF {}: {e}",
-                gguf_path.display()
-            ))
-        })?;
-        let content = gguf_file::Content::read(&mut file)
-            .map_err(|e| DomainError::Inference(format!("failed to parse GGUF header: {e}")))?;
-
-        let mut model = ModelWeights::from_gguf(content, &mut file, &device)
-            .map_err(|e| DomainError::Inference(format!("failed to load Qwen2.5 GGUF: {e}")))?;
-
-        for seg in &mut transcript.segments {
-            if seg.text.trim().is_empty() {
-                continue;
-            }
-            let prompt = build_subtitle_fixer_prompt(&seg.text, glossary_entries);
-            let encoding = tokenizer
-                .encode(prompt, true)
-                .map_err(|e| DomainError::Inference(format!("tokenizer encode failed: {e}")))?;
-            let prompt_tokens = encoding.get_ids();
-            if prompt_tokens.is_empty() {
-                continue;
-            }
-
-            let input = Tensor::new(prompt_tokens, &device)
-                .and_then(|t| t.unsqueeze(0))
-                .map_err(|e| DomainError::Inference(format!("prompt tensor error: {e}")))?;
-
-            let mut logits = model
-                .forward(&input, 0)
-                .map_err(|e| DomainError::Inference(format!("qwen prefill error: {e}")))?;
-            let max_new_tokens = (seg.text.split_whitespace().count() * 3 + 24).clamp(24, 128);
-            let mut generated: Vec<u32> = Vec::with_capacity(max_new_tokens);
-
-            for pos in (prompt_tokens.len()..).take(max_new_tokens) {
-                let next_token = argmax_last_logit(&logits)?;
-                if next_token == eos_im_end || next_token == eos_eot {
-                    break;
-                }
-                generated.push(next_token);
-
-                if let Ok(piece) = tokenizer.decode(&[next_token], true)
-                    && piece.contains('\n')
-                    && generated.len() > 2
-                {
-                    break;
-                }
-
-                let next_input = Tensor::new(&[next_token], &device)
-                    .and_then(|t| t.unsqueeze(0))
-                    .map_err(|e| DomainError::Inference(format!("step tensor error: {e}")))?;
-                logits = model
-                    .forward(&next_input, pos)
-                    .map_err(|e| DomainError::Inference(format!("qwen decode error: {e}")))?;
-            }
-
-            let decoded = tokenizer
-                .decode(&generated, true)
-                .map_err(|e| DomainError::Inference(format!("tokenizer decode failed: {e}")))?;
-            let first_line = decoded
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty())
-                .unwrap_or("")
-                .trim_matches('"')
-                .trim();
-
-            let candidate = if first_line.is_empty() || first_line.len() > seg.text.len() * 3 + 32 {
-                apply_glossary_and_cleanup(&seg.text, glossary_entries, true)
-            } else {
-                apply_glossary_and_cleanup(first_line, glossary_entries, true)
-            };
-
-            seg.llm_draft = Some(candidate.clone());
-            seg.text = candidate;
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(feature = "local-llm")]
-fn argmax_last_logit(logits: &candle_core::Tensor) -> DomainResult<u32> {
-    let flat = match logits.dims() {
-        [_b, _seq, _vocab] => {
-            let seq_len = logits.dim(1).map_err(|e| DomainError::Inference(e.to_string()))?;
-            logits
-                .narrow(1, seq_len.saturating_sub(1), 1)
-                .and_then(|t| t.squeeze(0))
-                .and_then(|t| t.squeeze(0))
-        }
-        [_b, _vocab] => logits.squeeze(0),
-        [_vocab] => Ok(logits.clone()),
-        other => {
-            return Err(DomainError::Inference(format!(
-                "unexpected Qwen logits rank: {other:?}"
-            )));
-        }
-    }
-    .map_err(|e| DomainError::Inference(format!("failed to slice logits: {e}")))?;
-
-    let scores: Vec<f32> = flat
-        .to_vec1()
-        .map_err(|e| DomainError::Inference(format!("failed to read logits vector: {e}")))?;
-    let (best_idx, _) = scores
-        .iter()
-        .enumerate()
-        .fold((0usize, f32::NEG_INFINITY), |(bi, bv), (i, &v)| {
-            if v > bv { (i, v) } else { (bi, bv) }
-        });
-    Ok(best_idx as u32)
 }
 
 fn invert_silences(silences: &[SilenceSpan], total_ms: u64) -> Vec<SilenceSpan> {
@@ -817,14 +750,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "downloads Qwen2.5-0.5B-Instruct Q4_K_M GGUF + tokenizer (~405MB) and runs live inference"]
-    fn live_qwen_subtitle_fixer_smoke_test() {
+    fn fixes_subtitles_with_deterministic_glossary_fixer() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let mgr = ModelManager::default();
-        rt.block_on(mgr.ensure_task_bundle(ModelType::TextFixer))
-            .unwrap();
-
-        let engine = LocalAudioEngine::from_model_manager(&mgr);
+        let engine = LocalAudioEngine::new("whisper-base-q5_1", "qwen2.5-0.5b-instruct-q4_k_m");
         let raw = Transcript {
             locale: "vi-VN".into(),
             asr_model_version: "whisper-base-q5_1".into(),
@@ -833,9 +761,9 @@ mod tests {
                 id: Uuid::new_v4(),
                 start_ms: 0,
                 end_ms: 2_500,
-                raw_asr: "ờ, hôm nay mình review cơ sơ trên mác búc".into(),
+                raw_asr: "ờ, hôm nay mình review cơ sơ trên mác búc .".into(),
                 llm_draft: None,
-                text: "ờ, hôm nay mình review cơ sơ trên mác búc".into(),
+                text: "ờ, hôm nay mình review cơ sơ trên mác búc .".into(),
                 speaker: None,
                 words: vec![],
             }],
@@ -856,10 +784,23 @@ mod tests {
         let fixed = rt.block_on(engine.fix_subtitles_local(&raw, &glossary)).unwrap();
         assert_eq!(
             fixed.llm_model_version.as_deref(),
-            Some("qwen2.5-0.5b-instruct-q4_k_m")
+            Some("qwen2.5-0.5b-instruct-q4_k_m:glossary")
         );
-        let text = &fixed.segments[0].text;
-        println!("Qwen2.5 fixed subtitle: {text}");
-        assert!(!text.is_empty());
+        assert_eq!(
+            fixed.segments[0].text,
+            "Hôm nay mình review Cursor trên MacBook."
+        );
+        assert_eq!(
+            fixed.segments[0].llm_draft.as_deref(),
+            Some("Hôm nay mình review Cursor trên MacBook.")
+        );
+
+        let custom = DeterministicGlossaryFixer::default().with_strip_fillers(false);
+        let fixed_custom = engine.fix_subtitles_with(&raw, &glossary, &custom).unwrap();
+        assert_eq!(
+            fixed_custom.llm_model_version.as_deref(),
+            Some("deterministic-glossary-v1")
+        );
+        assert!(fixed_custom.segments[0].text.starts_with("Ờ, "));
     }
 }

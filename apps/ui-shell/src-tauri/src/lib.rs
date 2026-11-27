@@ -1,5 +1,5 @@
-use std::path::Path;
-use tauri::State;
+use std::path::{Path, PathBuf};
+use tauri::{Manager, State};
 use tinycut_ai_audio::LocalAudioEngine;
 use tinycut_core_domain::{
     EditDiff, GlossaryEntry, InferenceMode, MediaRef, ModelInstallStatus, ModelType, Project,
@@ -8,28 +8,43 @@ use tinycut_core_domain::{
 use tinycut_export_engine::{
     export_ass, export_edl, export_fcpxml, export_premiere_xml, export_srt,
 };
+use tinycut_gpu_compositor::{CompositorFrameTask, create_best_compositor};
 use tinycut_local_store::{GlossaryStore, SqliteStore, WhitelistedFace};
 use tinycut_media_engine::{FfmpegMediaExtractor, MediaExtractor};
 use tinycut_model_hub::ModelManager;
 use tinycut_sync_client::scrub_pii;
-use tinycut_vision_shield::LocalVisionEngine;
+use tinycut_vision_shield::{
+    LocalVisionEngine, apply_zero_leak_padding, interpolate_boxes_for_frame,
+};
 use uuid::Uuid;
 
 pub struct AppState {
     pub store: SqliteStore,
     pub media: FfmpegMediaExtractor,
     pub models: ModelManager,
+    pub proxy_cache_dir: PathBuf,
 }
 
 impl AppState {
-    fn new() -> Self {
-        let store = open_default_store().unwrap_or_else(|_| {
+    fn new(data_dir: Option<PathBuf>) -> Self {
+        let base_dir = resolve_app_data_dir(data_dir);
+        let store = open_store_in(&base_dir).unwrap_or_else(|_| {
             SqliteStore::open_in_memory().expect("in-memory sqlite fallback must open")
         });
+        let models = if std::env::var("TINYCUT_MODELS_DIR")
+            .ok()
+            .is_some_and(|v| !v.trim().is_empty())
+        {
+            ModelManager::default()
+        } else {
+            ModelManager::with_dir(base_dir.join("models"))
+        };
+        let proxy_cache_dir = base_dir.join("proxies");
         Self {
             store,
             media: FfmpegMediaExtractor::default(),
-            models: ModelManager::default(),
+            models,
+            proxy_cache_dir,
         }
     }
 
@@ -42,16 +57,23 @@ impl AppState {
     }
 }
 
-fn open_default_store() -> Result<SqliteStore, String> {
-    let base = std::env::var("HOME")
+fn resolve_app_data_dir(tauri_data_dir: Option<PathBuf>) -> PathBuf {
+    if let Some(dir) = tauri_data_dir {
+        return dir;
+    }
+    let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|e| e.to_string())?;
-    let dir = Path::new(&base).join(".tinycut");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    SqliteStore::open(dir.join("tinycut.sqlite")).map_err(|e| e.to_string())
+        .unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".tinycut")
+}
+
+fn open_store_in(base_dir: &Path) -> Result<SqliteStore, String> {
+    std::fs::create_dir_all(base_dir).map_err(|e| e.to_string())?;
+    SqliteStore::open(base_dir.join("tinycut.sqlite")).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 fn probe_media(state: State<'_, AppState>, path: String) -> Result<MediaRef, String> {
     state
         .media
@@ -60,6 +82,7 @@ fn probe_media(state: State<'_, AppState>, path: String) -> Result<MediaRef, Str
 }
 
 #[tauri::command]
+#[specta::specta]
 fn open_project_from_path(
     state: State<'_, AppState>,
     path: String,
@@ -104,11 +127,13 @@ fn open_project_from_path(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn list_recent_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
     state.store.list_projects().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 fn save_project(state: State<'_, AppState>, project: Project) -> Result<(), String> {
     state
         .store
@@ -117,6 +142,43 @@ fn save_project(state: State<'_, AppState>, project: Project) -> Result<(), Stri
 }
 
 #[tauri::command]
+#[specta::specta]
+async fn prepare_preview_proxy(
+    state: State<'_, AppState>,
+    media: MediaRef,
+) -> Result<String, String> {
+    let extractor = state.media.clone();
+    let cache_dir = state.proxy_cache_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        extractor
+            .build_preview_proxy(&media, &cache_dir)
+            .map(|p| p.display().to_string())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("preview proxy worker failed: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn extract_waveform(
+    state: State<'_, AppState>,
+    media: MediaRef,
+    buckets: u32,
+) -> Result<Vec<f32>, String> {
+    let extractor = state.media.clone();
+    let count = (buckets as usize).clamp(16, 2048);
+    tokio::task::spawn_blocking(move || {
+        extractor
+            .extract_waveform_peaks(&media, count)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("waveform worker failed: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn transcribe_local(
     state: State<'_, AppState>,
     media: MediaRef,
@@ -140,6 +202,7 @@ async fn transcribe_local(
 }
 
 #[tauri::command]
+#[specta::specta]
 async fn fix_subtitles_local(
     state: State<'_, AppState>,
     transcript: Transcript,
@@ -156,6 +219,7 @@ async fn fix_subtitles_local(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn upsert_glossary_term(
     state: State<'_, AppState>,
     spoken_variant: String,
@@ -169,6 +233,7 @@ fn upsert_glossary_term(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn delete_glossary_term(
     state: State<'_, AppState>,
     spoken_variant: String,
@@ -181,11 +246,13 @@ fn delete_glossary_term(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn list_glossary(state: State<'_, AppState>) -> Result<Vec<GlossaryEntry>, String> {
     state.store.all_entries().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 fn export_subtitles(
     transcript: Transcript,
     media: MediaRef,
@@ -202,6 +269,71 @@ fn export_subtitles(
 }
 
 #[tauri::command]
+#[specta::specta]
+async fn export_redacted_video(
+    state: State<'_, AppState>,
+    media: MediaRef,
+    tracks: Vec<RedactionTrack>,
+    config: ShieldConfig,
+    output_path: String,
+) -> Result<String, String> {
+    let trimmed = output_path.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("output path cannot be empty".into());
+    }
+    let extractor = state.media.clone();
+    tokio::task::spawn_blocking(move || {
+        let total_frames = ((media.duration_ms as f64 / 1000.0) * media.fps.max(1.0) as f64)
+            .round()
+            .max(1.0) as u64;
+        let padded_tracks: Vec<RedactionTrack> = tracks
+            .iter()
+            .map(|t| apply_zero_leak_padding(t, &config, total_frames))
+            .collect();
+
+        let stream = extractor
+            .stream_all_frames_rgba(&media)
+            .map_err(|e| e.to_string())?;
+        let width = stream.width();
+        let height = stream.height();
+        let fps = media.fps.max(1.0);
+        let out_path = PathBuf::from(&trimmed);
+        let audio_src = Path::new(&media.path);
+        let mut writer = extractor
+            .open_video_writer(width, height, fps, Some(audio_src), &out_path)
+            .map_err(|e| e.to_string())?;
+
+        let compositor = create_best_compositor();
+        for frame_res in stream {
+            let frame = frame_res.map_err(|e| e.to_string())?;
+            let boxes = interpolate_boxes_for_frame(&padded_tracks, frame.frame_index);
+            if boxes.is_empty() {
+                writer
+                    .write_frame_rgba(&frame.rgba)
+                    .map_err(|e| e.to_string())?;
+            } else {
+                let task = CompositorFrameTask {
+                    frame_index: frame.frame_index,
+                    style: config.blur_style,
+                    boxes,
+                };
+                let rendered = compositor
+                    .render_frame_rgba8(frame.width, frame.height, &frame.rgba, &task)
+                    .map_err(|e| e.to_string())?;
+                writer
+                    .write_frame_rgba(&rendered)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        writer.finish().map_err(|e| e.to_string())?;
+        Ok(out_path.display().to_string())
+    })
+    .await
+    .map_err(|e| format!("burn-in video export worker failed: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
 fn save_text_file(path: String, contents: String) -> Result<String, String> {
     let target = Path::new(path.trim());
     if let Some(parent) = target.parent()
@@ -214,6 +346,7 @@ fn save_text_file(path: String, contents: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 async fn detect_privacy_local(
     state: State<'_, AppState>,
     media: MediaRef,
@@ -234,11 +367,13 @@ async fn detect_privacy_local(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInstallStatus>, String> {
     Ok(state.models.list_statuses())
 }
 
 #[tauri::command]
+#[specta::specta]
 async fn download_model(
     state: State<'_, AppState>,
     task: ModelType,
@@ -251,6 +386,7 @@ async fn download_model(
 }
 
 #[tauri::command]
+#[specta::specta]
 async fn download_all_default_models(
     state: State<'_, AppState>,
 ) -> Result<Vec<ModelInstallStatus>, String> {
@@ -262,6 +398,7 @@ async fn download_all_default_models(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn delete_model(
     state: State<'_, AppState>,
     task: ModelType,
@@ -271,12 +408,13 @@ fn delete_model(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn whitelist_creator_face(
     state: State<'_, AppState>,
     id: String,
     label: String,
     embedding: Vec<f32>,
-) -> Result<usize, String> {
+) -> Result<u32, String> {
     state
         .store
         .upsert_face_whitelist(&WhitelistedFace {
@@ -288,11 +426,12 @@ fn whitelist_creator_face(
     state
         .store
         .list_face_whitelist()
-        .map(|v| v.len())
+        .map(|v| v.len() as u32)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 fn record_edit_diff(
     state: State<'_, AppState>,
     project: Project,
@@ -321,35 +460,84 @@ fn record_edit_diff(
 }
 
 #[tauri::command]
+#[specta::specta]
 fn scrub_text_preview(text: String) -> String {
     scrub_pii(&text)
 }
 
+pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
+        .disable_serde_phases()
+        .dangerously_cast_bigints_to_number()
+        .semantic_types(
+            specta_typescript::semantic::Configuration::empty().enable_lossless_floats(),
+        )
+        .commands(tauri_specta::collect_commands![
+        probe_media,
+        open_project_from_path,
+        list_recent_projects,
+        save_project,
+        prepare_preview_proxy,
+        extract_waveform,
+        transcribe_local,
+        fix_subtitles_local,
+        upsert_glossary_term,
+        delete_glossary_term,
+        list_glossary,
+        export_subtitles,
+        export_redacted_video,
+        save_text_file,
+        detect_privacy_local,
+        list_models,
+        download_model,
+        download_all_default_models,
+        delete_model,
+        whitelist_creator_face,
+        record_edit_diff,
+        scrub_text_preview,
+    ])
+}
+
+pub fn export_typescript_bindings(path: &Path) -> Result<(), String> {
+    specta_builder()
+        .export(specta_typescript::Typescript::default(), path)
+        .map_err(|e| format!("failed to export TypeScript bindings: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let builder = specta_builder();
+
+    #[cfg(debug_assertions)]
+    {
+        let bindings_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../ui-web/src/bindings.ts");
+        if bindings_path.parent().is_some_and(|p| p.exists()) {
+            let _ = export_typescript_bindings(&bindings_path);
+        }
+    }
+
     tauri::Builder::default()
-        .manage(AppState::new())
-        .invoke_handler(tauri::generate_handler![
-            probe_media,
-            open_project_from_path,
-            list_recent_projects,
-            save_project,
-            transcribe_local,
-            fix_subtitles_local,
-            upsert_glossary_term,
-            delete_glossary_term,
-            list_glossary,
-            export_subtitles,
-            save_text_file,
-            detect_privacy_local,
-            list_models,
-            download_model,
-            download_all_default_models,
-            delete_model,
-            whitelist_creator_face,
-            record_edit_diff,
-            scrub_text_preview,
-        ])
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir().ok();
+            app.manage(AppState::new(data_dir));
+            Ok(())
+        })
+        .invoke_handler(builder.invoke_handler())
         .run(tauri::generate_context!())
         .expect("error while running TinyCut");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generates_valid_typescript_bindings() {
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui-web/src/bindings.ts");
+        export_typescript_bindings(&out).expect("tauri-specta TypeScript export must succeed");
+        let content = std::fs::read_to_string(&out).expect("bindings file must be readable");
+        assert!(content.contains("preparePreviewProxy") || content.contains("prepare_preview_proxy"));
+        assert!(content.contains("exportRedactedVideo") || content.contains("export_redacted_video"));
+    }
 }

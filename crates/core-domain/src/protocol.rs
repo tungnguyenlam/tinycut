@@ -13,6 +13,7 @@ pub const PROTOCOL_VERSION: &str = "v1";
 /// Batch of locally PII-scrubbed, opt-in subtitle corrections sent to
 /// `POST /v1/telemetry/text-diffs`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct TextDiffTelemetryBatch {
     pub anonymous_client_id: String,
     pub app_version: String,
@@ -26,6 +27,7 @@ pub struct TextDiffTelemetryBatch {
 /// Request to upload a user-confirmed visual false-positive ("hard negative") crop
 /// (`<= 256x256px`) to `POST /v1/telemetry/vision-negatives`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct VisionHardNegativeRequest {
     pub anonymous_client_id: String,
     pub app_version: String,
@@ -37,6 +39,7 @@ pub struct VisionHardNegativeRequest {
 
 /// Presigned upload slot returned for a vision hard-negative crop.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct VisionHardNegativeUploadResponse {
     pub upload_id: Uuid,
     pub upload_url: String,
@@ -45,6 +48,7 @@ pub struct VisionHardNegativeUploadResponse {
 
 /// Type of heavy inference job offloaded via Smart Proxy Offloading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum CloudBoostTaskKind {
     Transcribe,
@@ -54,6 +58,7 @@ pub enum CloudBoostTaskKind {
 
 /// Request payload for `POST /v1/jobs/cloud-boost`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CreateCloudBoostJobRequest {
     pub task: CloudBoostTaskKind,
     pub locale: String,
@@ -69,6 +74,7 @@ pub struct CreateCloudBoostJobRequest {
 /// Response payload from `POST /v1/jobs/cloud-boost` containing an ephemeral
 /// upload URL for the smart proxy and the SSE progress stream path.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CreateCloudBoostJobResponse {
     pub job_id: Uuid,
     pub upload_url: String,
@@ -78,6 +84,7 @@ pub struct CreateCloudBoostJobResponse {
 
 /// Server-Sent Event (SSE) progress frame streamed by `GET /v1/jobs/{job_id}/stream`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct JobProgressEvent {
     pub job_id: Uuid,
     pub stage: String,

@@ -2325,3 +2325,54 @@ textarea:focus-visible {
 .tc-toast__icon--success { color: var(--success); }
 .tc-toast__icon--warning { color: var(--warning); }
 .tc-toast__icon--error   { color: var(--danger); }
+
+/* ============================================================================
+ * Path A Additions — 60fps Canvas Redaction Overlay & Burn-In Video Export
+ * ============================================================================ */
+
+.tc-redaction-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 8;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.tc-rbox-selected-bar {
+  position: absolute;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 4px;
+  border-radius: 999px;
+  background: rgba(16, 18, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transform: translate(-50%, 6px);
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.tc-export-section-sep {
+  height: 1px;
+  background: var(--hairline);
+  margin: 4px 0;
+}
+
+.tc-burnin-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.tc-tl-canvas {
+  user-select: none;
+  -webkit-user-select: none;
+}

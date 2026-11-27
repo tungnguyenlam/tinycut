@@ -7,9 +7,11 @@ license.workspace = true
 [features]
 default = ["native"]
 native = ["dep:async-trait"]
+specta = ["dep:specta"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
 serde = { workspace = true }
+specta = { version = "=2.0.0-rc.28", features = ["uuid", "derive"], optional = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }

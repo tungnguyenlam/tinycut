@@ -477,20 +477,22 @@ impl LocalVisionEngine {
 
         if path.exists() && media.width > 0 && media.height > 0 {
             let extractor = FfmpegMediaExtractor::default();
-            let frames = extractor.extract_sampled_frames_rgba(media, 6.0, 640)?;
+            let frame_stream = extractor.stream_sampled_frames_rgba(media, 6.0, 640)?;
 
             #[cfg(feature = "onnx")]
             {
                 let mut bundle = detectors::OnnxDetectorBundle::load(self, cfg)?;
-                for frame in &frames {
-                    let dets = bundle.detect_frame(frame, cfg)?;
+                for frame_res in frame_stream {
+                    let frame = frame_res?;
+                    let dets = bundle.detect_frame(&frame, cfg)?;
                     tracker.update_frame(frame.frame_index, &dets);
                 }
             }
 
             #[cfg(not(feature = "onnx"))]
-            for frame in &frames {
-                let dets = detectors::detect_frame_non_onnx(frame, cfg)?;
+            for frame_res in frame_stream {
+                let frame = frame_res?;
+                let dets = detectors::detect_frame_non_onnx(&frame, cfg)?;
                 tracker.update_frame(frame.frame_index, &dets);
             }
         } else {

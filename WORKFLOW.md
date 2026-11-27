@@ -14,7 +14,7 @@ flowchart LR
     A["Import Video/Audio"] --> B["Extract 16kHz Mono Audio\n(media-engine)"]
     B --> C["Load Local Personal Glossary\n(SQLite)"]
     C --> D{"Inference Mode"}
-    D -- "Local (Default / Offline)" --> E["LocalBackend:\nwhisper-rs + local Qwen GGUF"]
+    D -- "Local (Default / Offline)" --> E["LocalBackend:\nwhisper-rs + Glossary / SubtitleFixer"]
     D -- "Optional Cloud Boost" --> F["CloudBoostBackend:\nOpus Proxy -> v1 API"]
     E --> G["Word-Level Transcript +\nSilero-VAD Silence Map"]
     F --> G
@@ -94,12 +94,12 @@ Only executes when compiled with the `telemetry` feature, explicitly opted in by
 ### Client Milestone Tracker
 1. **Phase 0 — Workspace Bootstrap**
    - [x] Initialize Cargo workspace (`core-domain`, `model-hub`, `media-engine`, `ai-audio`, `vision-shield`, `gpu-compositor`, `export-engine`, `local-store`, `sync-client`).
-   - [x] Define `InferenceBackend` trait, WASM-clean domain structs, and `v1` wire protocol (`core-domain/src/protocol.rs`).
-   - [x] Scaffold **Tauri v2 + Dioxus (WASM)** (`apps/ui-dioxus` + `apps/ui-shell/src-tauri`).
+   - [x] Define `InferenceBackend` trait, minimal domain structs (optional `specta` derives), and `v1` wire protocol (`core-domain/src/protocol.rs`).
+   - [x] Migrate Studio UI to **Tauri v2 + SolidJS / TypeScript + `tauri-specta`** (`apps/ui-web` + `apps/ui-shell/src-tauri`).
 2. **Phase 1 — v0.1 Desktop MVP (macOS, Windows, Linux)**
-   - [x] Wire local audio pipeline: audio extraction → `whisper-rs` → `candle` Qwen fixer → SQLite Personal Glossary → SRT/ASS/FCPXML/Premiere/EDL exporter.
-   - [x] Wire local vision pipeline: `ort` (`YuNet` + `SFace` whitelist + `RT-DETRv2` plate detector) → `ByteTrack` + Zero-Leak padding → `wgpu` blur shader.
-   - [x] Build interactive subtitle/diff editor, model manager, and timeline track toggle UI.
+   - [x] Wire consolidated 2-runtime local audio pipeline: audio extraction → `whisper-rs` (GGML) + Silero-VAD (`ort`) → extensible `SubtitleFixer` + SQLite Personal Glossary → SRT/ASS/FCPXML/Premiere/EDL exporter.
+   - [x] Wire streaming local vision pipeline: `SampledFrameStream` → `ort` (`YuNet` + `SFace` whitelist + `RT-DETRv2` plate detector) → `ByteTrack` + Zero-Leak padding → reusable-buffer `wgpu` blur shader & MP4 burn-in export.
+   - [x] Build interactive subtitle/diff editor, cached preview proxy, real waveform timeline, model manager, and 60fps `<canvas>` redaction overlay UI.
    - [x] Separate private server / cloud inference / ML pipelines into a dedicated repository.
 3. **Phase 2 — v0.2 Cloud Boost Client & OTA Manifests**
    - [ ] Implement HTTP/SSE transport in `CloudBoostBackend` against the `v1` protocol.

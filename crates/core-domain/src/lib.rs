@@ -26,6 +26,7 @@ pub enum DomainError {
 pub type DomainResult<T> = Result<T, DomainError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceMode {
     Local,
@@ -33,6 +34,7 @@ pub enum InferenceMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct MediaRef {
     pub id: Uuid,
     pub path: String,
@@ -43,6 +45,7 @@ pub struct MediaRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Project {
     pub id: Uuid,
     pub title: String,
@@ -64,6 +67,7 @@ impl Project {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct WordTiming {
     pub word: String,
     pub start_ms: u64,
@@ -72,6 +76,7 @@ pub struct WordTiming {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct TranscriptSegment {
     pub id: Uuid,
     pub start_ms: u64,
@@ -84,6 +89,7 @@ pub struct TranscriptSegment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Transcript {
     pub locale: String,
     pub asr_model_version: String,
@@ -92,6 +98,7 @@ pub struct Transcript {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct GlossaryEntry {
     pub spoken_variant: String,
     pub preferred_term: String,
@@ -99,6 +106,7 @@ pub struct GlossaryEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum EditType {
     WordFix,
@@ -108,6 +116,7 @@ pub enum EditType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct EditDiff {
     pub raw_asr: String,
     pub llm_draft: Option<String>,
@@ -117,6 +126,7 @@ pub struct EditDiff {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum RedactionKind {
     LicensePlate,
@@ -126,6 +136,7 @@ pub enum RedactionKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum BlurStyle {
     Gaussian,
@@ -135,6 +146,7 @@ pub enum BlurStyle {
 
 /// Normalized bounding box in `[0.0, 1.0]` image coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct NormalizedBox {
     pub x: f32,
     pub y: f32,
@@ -162,6 +174,7 @@ impl NormalizedBox {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct RedactionKeyframe {
     pub frame_index: u64,
     pub bbox: NormalizedBox,
@@ -169,6 +182,7 @@ pub struct RedactionKeyframe {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct RedactionTrack {
     pub track_id: u64,
     pub kind: RedactionKind,
@@ -178,6 +192,7 @@ pub struct RedactionTrack {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ShieldConfig {
     pub detect_plates: bool,
     pub detect_faces: bool,
@@ -203,6 +218,7 @@ impl Default for ShieldConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum ModelType {
     /// Speech-to-text ASR (Whisper GGML).
@@ -243,6 +259,7 @@ impl ModelType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceTier {
     Mobile,
@@ -250,6 +267,7 @@ pub enum DeviceTier {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct DefaultModelSpec {
     pub task: ModelType,
     pub id: String,
@@ -265,6 +283,7 @@ pub struct DefaultModelSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ModelInstallStatus {
     pub spec: DefaultModelSpec,
     pub installed: bool,
@@ -308,7 +327,7 @@ pub fn default_lightweight_models() -> Vec<DefaultModelSpec> {
             display_name: "Qwen2.5 0.5B Instruct (Q4_K_M)".into(),
             task_label: "Subtitle Fixer LLM".into(),
             filename: "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf".into(),
-            runtime: "candle (GGUF)".into(),
+            runtime: "ggml / glossary".into(),
             license: "Apache-2.0".into(),
             download_url: "https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf".into(),
             sha256: String::new(),
@@ -423,6 +442,7 @@ pub fn default_model_manifest(generated_at_unix: u64) -> ModelManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ModelArtifact {
     pub model_type: ModelType,
     pub tier: DeviceTier,
@@ -433,6 +453,7 @@ pub struct ModelArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ModelManifest {
     pub generated_at_unix: u64,
     pub models: Vec<ModelArtifact>,

@@ -11,10 +11,9 @@ members = [
     "crates/local-store",
     "crates/sync-client",
 ]
-# UI apps target wasm32 (ui-dioxus) or require OS WebView headers (ui-shell);
-# build them with `dx` and `cargo tauri` respectively.
+# Native Tauri shell requires OS WebView headers; build it with `cargo tauri`
+# and the TypeScript frontend in `apps/ui-web` with `pnpm`.
 exclude = [
-    "apps/ui-dioxus",
     "apps/ui-shell/src-tauri",
 ]
 
